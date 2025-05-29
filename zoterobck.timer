@@ -2,10 +2,9 @@
 Description=Backup Zotero using git
 
 [Timer]
-OnCalendar=daily
+OnCalendar=hourly
 Persistent=true
 Unit=zoterobck.service
 
 [Install]
 WantedBy=timers.target
-
