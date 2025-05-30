@@ -1,6 +1,33 @@
 #! /bin/sh
+
+notify_conflict() {
+    case "$(uname)" in
+        "Darwin") # macOS
+            osascript -e 'display notification "Please resolve conflicts manually in your Zotero folder" with title "Zotero Backup: Merge Conflict" sound name "Basso"'
+            ;;
+        "Linux")
+            if command -v notify-send >/dev/null 2>&1; then
+                notify-send -u critical "Zotero Backup: Merge Conflict" "Please resolve conflicts manually in your Zotero folder"
+            fi
+            ;;
+    esac
+}
+
 cd `dirname "$0"`
 echo "EXECUTING BACKUP OF `pwd`"
+
+# Attempt fast-forward pull first
+if ! git pull --ff-only origin master; then
+    # If fast-forward fails, try auto-merge favoring our changes
+    if ! git pull -X ours origin master; then
+        # If there are still conflicts, notify user and exit
+        echo "MERGE CONFLICT DETECTED!"
+        echo "Please resolve conflicts manually in $(pwd)"
+        echo "After resolving, commit your changes and the backup will resume in the next cycle"
+        notify_conflict
+        exit 1
+    fi
+fi
 
 DoBackupFlag=true
 
