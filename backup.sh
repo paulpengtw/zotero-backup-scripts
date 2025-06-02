@@ -14,6 +14,7 @@ notify_conflict() {
 }
 
 cd /Users/cheng/Zotero
+# swap to your Zotero directory 
 echo "EXECUTING BACKUP OF `pwd`"
 
 # Attempt fast-forward pull first
