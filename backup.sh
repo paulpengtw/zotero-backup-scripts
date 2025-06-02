@@ -13,7 +13,7 @@ notify_conflict() {
     esac
 }
 
-cd `dirname "$0"`
+cd /Users/cheng/Zotero
 echo "EXECUTING BACKUP OF `pwd`"
 
 # Attempt fast-forward pull first
@@ -46,7 +46,7 @@ if $DoBackupFlag; then
 		| sed -E 's/\srenamed(.*)/ren \1/' \
 		| sed -E 's/\sdeleted(.*)/del \1/' \
 		| sed -E 's/([a-z]{3}).*\/([^\/]*.pdf)$/(\1) \2/')
-	git commit -m "Daily backup" -m "$ChangedDocuments"
+	git commit -m "Hourly backup" -m "$ChangedDocuments"
 	git push origin master
 else
 	echo " -> Nothing to backup (no changes since last backup)"
