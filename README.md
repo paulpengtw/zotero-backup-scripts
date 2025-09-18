@@ -116,6 +116,35 @@ journalctl -u zoterobck.service --user -f
 
 ## Common Issues
 
+### Understanding Backup Files
+
+During the backup process, you might notice several types of files:
+
+1. **zotero.sqlite**: The main database file
+2. **zotero.sqlite.bak** and **zotero.sqlite.1.bak**: 
+   - Created automatically by Zotero as safety backups
+   - Not part of the Git backup process
+   - Safe to remove if causing conflicts
+3. **zotero.sqlite.part**: 
+   - Created by the backup script to split large database files
+   - Used for easier handling in Git
+   - Automatically managed by the backup script
+
+If you see merge conflicts or backup issues:
+
+1. Close Zotero
+2. Remove the backup files (safely):
+   ```bash
+   cd ~/Zotero
+   rm zotero.sqlite.*.bak    # Remove Zotero's backup files
+   rm zotero.sqlite.part*    # Remove partial backup files
+   ```
+3. Run the backup script manually:
+   ```bash
+   ./backup.sh
+   ```
+4. Reopen Zotero
+
 ### "Merge Conflict" Notification
 
 If you get a merge conflict notification:
