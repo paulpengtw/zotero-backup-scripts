@@ -2,13 +2,48 @@
 
 Automatically backup your Zotero library to Git, with hourly backups and cross-device synchronization.
 
+## Files That Make Up This Backup System
+
+This backup system consists of the following key files:
+
+### Core Backup Files
+- **`backup.sh`** - The main backup script that handles the entire backup process
+- **`.gitignore`** - Specifies which files should be excluded from backup (styles, translators, etc.)
+- **`README.md`** - This documentation file
+
+### System Integration Files (User Created)
+You'll need to create these files during setup:
+
+#### macOS (using launchd):
+- **`~/Library/LaunchAgents/com.user.zoterobck.plist`** - LaunchAgent configuration for automatic hourly backups
+
+#### Linux (using systemd):
+- **`~/.config/systemd/user/zoterobck.service`** - Systemd service definition
+- **`~/.config/systemd/user/zoterobck.timer`** - Systemd timer for hourly execution
+
+### What Gets Backed Up
+The backup system automatically includes:
+- **`zotero.sqlite`** - Your main Zotero database (split into parts for Git)
+- **`better-bibtex.sqlite`** - Better BibTeX plugin database
+- **`storage/`** - All your PDFs, notes, and attachments
+- **`aria/`** - AI assistant messages and data
+- Configuration files and other data files
+
+### What Gets Excluded
+The `.gitignore` file excludes:
+- System files (`.DS_Store`)
+- Zotero's built-in styles and translators (updated by Zotero itself)
+- Temporary files and signatures
+- Search engine icons
+
 ## What This Does
 
 - Creates hourly backups of your entire Zotero library
 - Backs up all your PDFs, notes, and database
 - Works across multiple computers
-- Sends notifications if there are any issues
+- Smart process handling with notifications
 - Keeps a complete history of all your changes
+- Automatically manages conflicts and file locks
 
 ## Quick Start Guide
 
@@ -28,11 +63,12 @@ Automatically backup your Zotero library to Git, with hourly backups and cross-d
 
 ### Step 2: Install the Backup Scripts
 
-1. Download this repository
-2. Make the backup script executable:
-   ```bash
-   chmod +x backup.sh
-   ```
+The backup system is already set up in this repository! The key files are:
+- `backup.sh` - Already executable and ready to use
+- `.gitignore` - Already configured to backup the right files
+- `README.md` - This documentation
+
+You don't need to download anything additional - just proceed to Step 3 to set up automatic backups.
 
 ### Step 3: Set Up Automatic Backups
 
@@ -44,7 +80,7 @@ Automatically backup your Zotero library to Git, with hourly backups and cross-d
    touch ~/Library/LaunchAgents/com.user.zoterobck.plist
    ```
 
-2. Copy this content to `~/Library/LaunchAgents/com.user.zoterobck.plist` (replace YOUR_USERNAME with your username):
+2. Copy this content to `~/Library/LaunchAgents/com.user.zoterobck.plist` (replace YOUR_USERNAME with your actual username):
    ```xml
    <?xml version="1.0" encoding="UTF-8"?>
    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -55,7 +91,7 @@ Automatically backup your Zotero library to Git, with hourly backups and cross-d
        <key>ProgramArguments</key>
        <array>
            <string>/bin/sh</string>
-           <string>/Users/YOUR_USERNAME/zotero-backup-scripts/backup.sh</string>
+           <string>/Users/YOUR_USERNAME/Zotero/backup.sh</string>
        </array>
        <key>WorkingDirectory</key>
        <string>/Users/YOUR_USERNAME/Zotero</string>
@@ -70,6 +106,8 @@ Automatically backup your Zotero library to Git, with hourly backups and cross-d
    </dict>
    </plist>
    ```
+
+   **Important:** Make sure the path `/Users/YOUR_USERNAME/Zotero/backup.sh` points to the actual location of the `backup.sh` file in this repository.
 
 3. Set file permissions and start the backup service:
    ```bash
@@ -91,6 +129,82 @@ Automatically backup your Zotero library to Git, with hourly backups and cross-d
    systemctl --user enable zoterobck.timer
    systemctl --user start zoterobck.timer
    ```
+
+## Understanding the backup.sh Script
+
+The `backup.sh` script is the heart of this backup system. Here's what it does:
+
+### Smart Process Management
+- **Zotero Detection**: Checks if Zotero is running before starting backup
+- **Automatic Waiting**: Waits up to 3 attempts (20 seconds each) for you to close Zotero
+- **Notifications**: Sends system notifications about backup status
+- **Process Safety**: Waits 5 seconds after Zotero closes to ensure files are released
+
+### File Handling
+- **Large File Management**: Splits `zotero.sqlite` into 25MB parts for Git compatibility
+- **Smart Cleanup**: Removes temporary `.part` files after successful backup
+- **Lock File System**: Prevents multiple backup processes from running simultaneously
+- **Automatic Recovery**: Removes stale lock files after 1 hour timeout
+
+### Git Integration
+- **Conflict Resolution**: Automatically handles merge conflicts with remote repository
+- **Smart Commits**: Only commits when there are actual changes
+- **Document Tracking**: Logs which PDFs and documents were added/modified
+- **Push Safety**: Only removes temporary files after successful Git push
+
+### Cross-Platform Support
+- **macOS**: Uses `osascript` for native notifications and `pgrep` for process detection
+- **Linux**: Uses `notify-send` for notifications and appropriate process management
+
+## How the Backup Process Works
+
+### Automatic Process Management
+
+The backup script now includes smart process management:
+
+1. When a backup starts, it checks if Zotero is running
+2. If Zotero is running:
+   - You'll receive a "Zotero Backup: Waiting" notification
+   - The script will wait up to 3 times (with 20-second intervals)
+   - After Zotero closes, it waits an additional 5 seconds for files to be released
+3. If Zotero doesn't close after maximum attempts:
+   - The backup is cancelled
+   - You'll receive a "Backup cancelled" notification
+   - The backup will try again in the next cycle
+
+### Lock File Management
+
+To prevent backup conflicts:
+
+- A lock file is created during backup
+- Lock files expire after 1 hour to prevent stuck backups
+- All temporary files are automatically cleaned up
+- Multiple backup attempts cannot run simultaneously
+
+### File Handling
+
+The script manages several types of files:
+
+1. **zotero.sqlite**: The main database file
+2. **zotero.sqlite.bak**: 
+   - Created by Zotero for safety
+   - Left untouched by the backup script
+   - Managed by Zotero itself
+3. **zotero.sqlite.part***:
+   - Created temporarily during backup
+   - Automatically cleaned up after successful backup
+   - Used to handle large database files in Git
+
+### Conflict Resolution
+
+The script now handles conflicts more gracefully:
+
+1. First attempts a fast-forward pull
+2. If that fails, tries auto-merge favoring local changes
+3. If conflicts still occur:
+   - Notifies you to close Zotero
+   - Preserves your local changes
+   - Will retry in the next backup cycle
 
 ## Checking if It's Working
 
@@ -114,59 +228,31 @@ systemctl --user status zoterobck.timer
 journalctl -u zoterobck.service --user -f
 ```
 
-## Common Issues
+## Troubleshooting
 
-### Understanding Backup Files
+### If You See "Zotero Backup: Waiting" Notification
 
-During the backup process, you might notice several types of files:
+1. Save your work in Zotero
+2. Close Zotero completely
+3. The backup will proceed automatically
+4. You can reopen Zotero after seeing "Backup completed successfully"
 
-1. **zotero.sqlite**: The main database file
-2. **zotero.sqlite.bak** and **zotero.sqlite.1.bak**: 
-   - Created automatically by Zotero as safety backups
-   - Not part of the Git backup process
-   - Safe to remove if causing conflicts
-3. **zotero.sqlite.part**: 
-   - Created by the backup script to split large database files
-   - Used for easier handling in Git
-   - Automatically managed by the backup script
-
-If you see merge conflicts or backup issues:
+### If You See "Backup Cancelled" Notification
 
 1. Close Zotero
-2. Remove the backup files (safely):
+2. Run the backup manually:
    ```bash
    cd ~/Zotero
-   rm zotero.sqlite.*.bak    # Remove Zotero's backup files
-   rm zotero.sqlite.part*    # Remove partial backup files
-   ```
-3. Run the backup script manually:
-   ```bash
    ./backup.sh
    ```
-4. Reopen Zotero
+3. Wait for completion before reopening Zotero
 
-### "Merge Conflict" Notification
+### Service Issues
 
-If you get a merge conflict notification:
-
-1. Open Terminal and go to your Zotero folder:
-   ```bash
-   cd ~/Zotero
-   ```
-2. Run `git status` to see which files have conflicts
-3. Resolve the conflicts (usually keeping your local changes is safe)
-4. Commit your changes:
-   ```bash
-   git add .
-   git commit -m "Resolved conflicts"
-   ```
-5. Backups will automatically resume
-
-### Service Won't Start
-
-1. Check if paths in the plist/service file match your username
-2. Make sure backup.sh is executable
-3. Try unloading and reloading the service:
+1. **Check file paths**: Make sure paths in your `.plist` (macOS) or `.service` (Linux) files match your actual username and the location of `backup.sh`
+2. **Verify backup.sh is executable**: Run `ls -la backup.sh` to confirm it has execute permissions
+3. **Test the script manually**: Run `./backup.sh` from your Zotero directory to test
+4. **Try restarting the service**:
    ```bash
    # macOS
    launchctl unload ~/Library/LaunchAgents/com.user.zoterobck.plist
@@ -176,13 +262,29 @@ If you get a merge conflict notification:
    systemctl --user restart zoterobck.timer
    ```
 
-## Restoring from Backup
+### File Structure Issues
 
-The database file (zotero.sqlite) is stored in parts to handle its size. To restore:
+If you're missing files or having permission issues:
+```bash
+# Check if backup.sh exists and is executable
+ls -la ~/Zotero/backup.sh
+
+# Make it executable if needed
+chmod +x ~/Zotero/backup.sh
+
+# Check if .gitignore exists
+ls -la ~/Zotero/.gitignore
+
+# Verify your plist file (macOS only)
+ls -la ~/Library/LaunchAgents/com.user.zoterobck.plist
+```
+
+## Restoring from Backup
 
 1. Get the latest backup from your Git repository
 2. In Terminal, go to your Zotero folder and run:
    ```bash
+   cd ~/Zotero
    cat zotero.sqlite.part* > zotero.sqlite
    ```
 
