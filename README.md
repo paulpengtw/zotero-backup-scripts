@@ -35,6 +35,11 @@ The `.gitignore` file excludes:
 - Zotero's built-in styles and translators (updated by Zotero itself)
 - Temporary files and signatures
 - Search engine icons
+- **`zotero.sqlite.bak` / `zotero.sqlite.1.bak`** - Zotero's own rolling backups. Since
+  `zotero.sqlite` is versioned directly, these are redundant copies of a file Git already
+  keeps full history of, and they roughly triple the repository growth rate. See
+  [High Memory Usage from Git Maintenance](#high-memory-usage-from-git-maintenance).
+- **`zotero.sqlite.part*`** - Transient chunks from the `split` step, deleted after each run
 
 ## What This Does
 
@@ -247,6 +252,66 @@ journalctl -u zoterobck.service --user -f
    ```
 3. Wait for completion before reopening Zotero
 
+### High Memory Usage from Git Maintenance
+
+**Symptom:** one or more `git pack-objects` processes each consuming 1-2 GB of RAM, appearing
+without you having run any Git command yourself. On macOS they may show up as
+`Xcode.app/.../git-core/git pack-objects`.
+
+**Cause.** This backup design commits `zotero.sqlite` (tens of MB) on every cycle. SQLite files
+barely delta-compress, so each hourly backup stores a near-complete new copy. Git's automatic
+maintenance (`git maintenance run --auto`) is triggered internally by the `fetch`, `commit` and
+`push` that `backup.sh` performs, and it then tries to repack that history. `pack-objects` must
+hold whole blobs in memory to compute deltas, and with Git's default *unbounded*
+`pack.windowMemory` this can reach gigabytes.
+
+Because one backup cycle runs `fetch`, `commit` and `push`, each can spawn its own detached
+maintenance run, so two or three overlapping repacks may pile up.
+
+This is self-reinforcing: if a repack is killed before finishing, nothing is absorbed into the
+pack and the loose-object backlog grows every cycle, making the next attempt more expensive.
+Observed on one 21 GB library: **18.5 GB of loose objects against a 713 MB pack**, with a pack
+file that had not been rewritten in two months.
+
+**Diagnosis:**
+```bash
+# Are repacks running right now, and how big?
+ps -Ao pid,rss,etime,command | grep "[p]ack-objects"
+
+# How large is the loose-object backlog? (loose "size" >> "size-pack" is the warning sign)
+cd ~/Zotero && git count-objects -vH
+```
+
+**Fix — cap Git's packing memory** (safe globally; affects all repositories):
+```bash
+git config --global pack.windowMemory 128m
+git config --global pack.deltaCacheSize 128m
+git config --global pack.threads 1
+git config --global pack.packSizeLimit 1g
+git config --global core.bigFileThreshold 8m
+```
+`core.bigFileThreshold` matters most here: anything larger is stored without delta compression,
+so large `.sqlite`, PDF and HTML blobs are never loaded into a delta window.
+
+**Fix — stop the backup repo from auto-triggering maintenance:**
+```bash
+cd ~/Zotero
+git config --local maintenance.auto false
+git config --local gc.auto 0
+git config --local gc.autoDetach false
+```
+Run `git gc` manually when convenient instead.
+
+**Fix — reduce what gets committed.** Ensure the `.bak` files are ignored *and untracked*
+(`.gitignore` alone has no effect on already-tracked files):
+```bash
+cd ~/Zotero
+git rm --cached zotero.sqlite.bak zotero.sqlite.1.bak   # --cached keeps them on disk
+```
+
+Killing a stuck repack is safe: `git repack -d` only deletes old packs after successfully
+writing new ones. Commits, history and the remote are unaffected.
+
 ### Service Issues
 
 1. **Check file paths**: Make sure paths in your `.plist` (macOS) or `.service` (Linux) files match your actual username and the location of `backup.sh`
@@ -281,11 +346,27 @@ ls -la ~/Library/LaunchAgents/com.user.zoterobck.plist
 
 ## Restoring from Backup
 
+`backup.sh` commits **both** the whole `zotero.sqlite` and the 25 MB chunks produced by its
+`split` step, so either can be used to restore. Close Zotero first.
+
 1. Get the latest backup from your Git repository
-2. In Terminal, go to your Zotero folder and run:
+2. In Terminal, go to your Zotero folder:
+
+   If `zotero.sqlite` is tracked directly (the default):
+   ```bash
+   cd ~/Zotero
+   git checkout -- zotero.sqlite
+   ```
+
+   If you are restoring from the split chunks instead:
    ```bash
    cd ~/Zotero
    cat zotero.sqlite.part* > zotero.sqlite
    ```
+
+> **Note on the split chunks.** Committing both forms stores the database twice per cycle. If you
+> add `zotero.sqlite.part*` to `.gitignore` to save space, use the `git checkout` method above.
+> Keep the chunks if your `zotero.sqlite` is approaching 100 MB, since GitHub rejects individual
+> files above that limit and the whole-file commit would start failing.
 
 Need help? [Open an issue](https://github.com/paulpengtw/zotero-backup-scripts/issues) on GitHub.
