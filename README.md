@@ -141,9 +141,9 @@ The `backup.sh` script is the heart of this backup system. Here's what it does:
 
 ### Smart Process Management
 - **Zotero Detection**: Checks if Zotero is running before starting backup
-- **Automatic Waiting**: Waits up to 3 attempts (20 seconds each) for you to close Zotero
-- **Notifications**: Sends system notifications about backup status
-- **Process Safety**: Waits 5 seconds after Zotero closes to ensure files are released
+- **Backs Up While Zotero Is Open**: Commits Zotero's own database backup (`zotero.sqlite.bak`) instead of the live database, which can't be copied safely while Zotero runs
+- **Notifications**: Sends a system notification if another machine's backup conflicts with this one
+- **Process Safety**: Waits 5 seconds before a backup with Zotero closed, in case it only just closed
 
 ### File Handling
 - **Large File Management**: Splits `zotero.sqlite` into 25MB parts for Git compatibility
@@ -165,17 +165,17 @@ The `backup.sh` script is the heart of this backup system. Here's what it does:
 
 ### Automatic Process Management
 
-The backup script now includes smart process management:
+Backups run whether or not Zotero is open:
 
-1. When a backup starts, it checks if Zotero is running
-2. If Zotero is running:
-   - You'll receive a "Zotero Backup: Waiting" notification
-   - The script will wait up to 3 times (with 20-second intervals)
-   - After Zotero closes, it waits an additional 5 seconds for files to be released
-3. If Zotero doesn't close after maximum attempts:
-   - The backup is cancelled
-   - You'll receive a "Backup cancelled" notification
-   - The backup will try again in the next cycle
+1. **Zotero closed**: everything is backed up, including the live `zotero.sqlite`.
+2. **Zotero open**: Zotero locks `zotero.sqlite` and keeps recent changes in `zotero.sqlite-wal`, so copying those files while it runs can capture a database that won't open. Instead:
+   - Attachments and other files are backed up as usual
+   - `zotero.sqlite.bak`, the backup Zotero makes of its own database about once a day, is committed as `zotero.sqlite`. The live file on disk is not touched
+   - The `.bak` is only used if it is newer than the database already committed and passes `sqlite3`'s `PRAGMA quick_check`
+   - Other `*.sqlite` files (such as `fulltext.sqlite`) wait for the next backup with Zotero closed
+   - If another machine has pushed a newer database, nothing is merged until Zotero is closed, so the database is never rewritten under a running Zotero
+
+While Zotero stays open, the backed-up database can be up to a day old. Closing Zotero before the next hourly run backs up the latest one.
 
 ### Lock File Management
 
@@ -193,7 +193,7 @@ The script manages several types of files:
 1. **zotero.sqlite**: The main database file
 2. **zotero.sqlite.bak**: 
    - Created by Zotero for safety
-   - Left untouched by the backup script
+   - Committed as `zotero.sqlite` while Zotero is open; the file itself is never modified
    - Managed by Zotero itself
 3. **zotero.sqlite.part***:
    - Created temporarily during backup
@@ -245,22 +245,13 @@ journalctl -u zoterobck.service --user -f
 
 ## Troubleshooting
 
-### If You See "Zotero Backup: Waiting" Notification
+### If the Database Isn't Backed Up While Zotero Is Open
 
-1. Save your work in Zotero
-2. Close Zotero completely
-3. The backup will proceed automatically
-4. You can reopen Zotero after seeing "Backup completed successfully"
+The log (`zoterobck.out` on macOS) says why:
 
-### If You See "Backup Cancelled" Notification
-
-1. Close Zotero
-2. Run the backup manually:
-   ```bash
-   cd ~/Zotero
-   ./backup.sh
-   ```
-3. Wait for completion before reopening Zotero
+- `zotero.sqlite.bak is not newer than the committed database`: Zotero hasn't made a new `.bak` since the last backup. Normal; close Zotero to back up the latest database
+- `could not be verified with sqlite3`: install `sqlite3`, or close Zotero for a full backup
+- `Another machine updated the database. Close Zotero to bring it in`: close Zotero and the next run brings in the other machine's library
 
 ### If You See "Zotero Backup: Conflict" Notification
 
