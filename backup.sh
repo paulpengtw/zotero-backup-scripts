@@ -1,47 +1,59 @@
 #! /bin/sh
 
-# Function to check if Zotero is running and wait for it to close
-check_zotero() {
-    local attempts=0
-    local max_attempts=3
-    
-    while [ $attempts -lt $max_attempts ]; do
-        case "$(uname)" in
-            "Darwin") # macOS
-                # Zotero 7+ names its macOS binary "zotero" (lowercase); match either
-                if ! pgrep -ix "zotero" > /dev/null; then
-                    # Wait an additional 5 seconds after Zotero closes to ensure files are released
-                    sleep 5
-                    return 0
-                fi
-                osascript -e 'display notification "Please close Zotero for backup to proceed. Waiting..." with title "Zotero Backup: Waiting" sound name "Basso"'
-                ;;
-            "Linux")
-                if ! pgrep -x "zotero" > /dev/null; then
-                    sleep 5
-                    return 0
-                fi
-                if command -v notify-send >/dev/null 2>&1; then
-                    notify-send -u critical "Zotero Backup: Waiting" "Please close Zotero for backup to proceed. Waiting..."
-                fi
-                ;;
-        esac
-        sleep 20
-        attempts=$((attempts + 1))
-    done
-    
-    # If we get here, Zotero didn't close after max attempts
+# Function to check if Zotero is running
+zotero_running() {
     case "$(uname)" in
         "Darwin") # macOS
-            osascript -e 'display notification "Backup cancelled - please close Zotero and try again later" with title "Zotero Backup: Cancelled" sound name "Basso"'
+            # Zotero 7+ names its macOS binary "zotero" (lowercase); match either
+            pgrep -ix "zotero" > /dev/null
             ;;
         "Linux")
-            if command -v notify-send >/dev/null 2>&1; then
-                notify-send -u critical "Zotero Backup: Cancelled" "Backup cancelled - please close Zotero and try again later"
-            fi
+            pgrep -x "zotero" > /dev/null
+            ;;
+        *)
+            # Can't tell, so assume it is running and leave the live database alone
+            return 0
             ;;
     esac
-    return 1
+}
+
+# Function to stage changes while Zotero is running. Zotero keeps an exclusive
+# lock on zotero.sqlite and holds recent changes in zotero.sqlite-wal, so a copy
+# of the live files can mix two states and fail to open. Stage everything else,
+# and stand in Zotero's own backup (zotero.sqlite.bak) for zotero.sqlite.
+stage_with_zotero_open() {
+    git add -A -- . ':(exclude)*.sqlite' ':(exclude)*.sqlite-*' ':(exclude)*.sqlite.tmp*'
+
+    if [ ! -f zotero.sqlite.bak ]; then
+        echo "No zotero.sqlite.bak yet; database not backed up this run."
+        return
+    fi
+
+    # Zotero refreshes the .bak about once a day, so it can be older than the
+    # database committed by the last backup with Zotero closed
+    BAK_TIME=$(stat -f %m zotero.sqlite.bak 2>/dev/null || stat -c %Y zotero.sqlite.bak)
+    COMMITTED_TIME=$(git log -1 --format=%ct -- zotero.sqlite)
+    if [ "$BAK_TIME" -le "${COMMITTED_TIME:-0}" ]; then
+        echo "zotero.sqlite.bak is not newer than the committed database; database not backed up this run."
+        return
+    fi
+
+    # Check a copy, so Zotero can't replace the .bak between the check and the commit
+    SNAPSHOT=$(mktemp) || return
+    cp zotero.sqlite.bak "$SNAPSHOT"
+    if [ "$(sqlite3 "file:$SNAPSHOT?immutable=1" 'PRAGMA quick_check;' 2>&1)" != "ok" ]; then
+        echo "zotero.sqlite.bak could not be verified with sqlite3; database not backed up this run."
+        rm -f "$SNAPSHOT"
+        return
+    fi
+
+    # Commit the .bak as zotero.sqlite without touching the live file. The .bak
+    # is self-contained, so drop the WAL files rather than pair them with it.
+    BLOB=$(git hash-object -w "$SNAPSHOT")
+    rm -f "$SNAPSHOT"
+    git update-index --cacheinfo 100644,"$BLOB",zotero.sqlite
+    git rm -q --cached --ignore-unmatch zotero.sqlite-wal zotero.sqlite-shm
+    echo "Database backed up from zotero.sqlite.bak"
 }
 
 # Function to notify about conflicts
@@ -90,10 +102,13 @@ trap cleanup EXIT
 cd "${ZOTERO_DIR:-$HOME/Zotero}" || exit 1
 echo "EXECUTING BACKUP OF $(pwd)"
 
-# Check if Zotero is running and wait for it to close
-if ! check_zotero; then
-    echo "WARNING: Zotero is still running after maximum wait time. Backup cancelled."
-    exit 1
+if zotero_running; then
+    ZOTERO_OPEN=1
+    echo "Zotero is running; backing up its own database backup (zotero.sqlite.bak) instead of the live database"
+else
+    ZOTERO_OPEN=0
+    # Give a Zotero that only just closed time to release its files
+    sleep 5
 fi
 
 # Clean up any existing part files before starting
@@ -101,6 +116,12 @@ rm -f zotero.sqlite.part*
 
 # Ensure we have the latest changes
 git fetch origin master
+
+# A merge must never rewrite the database under a running Zotero
+if [ $ZOTERO_OPEN = 1 ] && ! git diff --quiet HEAD...origin/master -- '*.sqlite' '*.sqlite-*' '*.sqlite.tmp*'; then
+    echo "Another machine updated the database. Close Zotero to bring it in; backup skipped."
+    exit 1
+fi
 
 # Bring in other machines' backups, but only as a fast-forward. Git cannot
 # merge two versions of zotero.sqlite, so if this machine and another one have
@@ -117,12 +138,21 @@ fi
 
 # Check if there are any changes to commit
 if ! git diff --quiet HEAD || ! git diff --cached --quiet; then
-    # Split large files
-    split -b 25M zotero.sqlite "zotero.sqlite.part"
-    
-    # Stage all changes
-    git add .
-    
+    if [ $ZOTERO_OPEN = 1 ]; then
+        stage_with_zotero_open
+    else
+        # Split large files
+        split -b 25M zotero.sqlite "zotero.sqlite.part"
+
+        # Stage all changes
+        git add .
+    fi
+
+    if git diff --cached --quiet; then
+        echo " -> Nothing to backup (no changes since last backup)"
+        exit 0
+    fi
+
     # Track document changes for commit message
     ChangedDocuments=$(git -c core.quotePath=false status | grep -E "\.(pdf|html|epub|pptx|docx)$" \
     | sed -E 's/[[:space:]]modified(.*)/mod \1/' \
