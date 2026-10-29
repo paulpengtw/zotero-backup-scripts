@@ -8,7 +8,8 @@ check_zotero() {
     while [ $attempts -lt $max_attempts ]; do
         case "$(uname)" in
             "Darwin") # macOS
-                if ! pgrep -x "Zotero" > /dev/null; then
+                # Zotero 7+ names its macOS binary "zotero" (lowercase); match either
+                if ! pgrep -ix "zotero" > /dev/null; then
                     # Wait an additional 5 seconds after Zotero closes to ensure files are released
                     sleep 5
                     return 0
@@ -86,7 +87,7 @@ touch "$LOCKFILE"
 # Ensure cleanup on script exit
 trap cleanup EXIT
 
-cd /Users/cheng/Zotero
+cd "${ZOTERO_DIR:-$HOME/Zotero}" || exit 1
 echo "EXECUTING BACKUP OF $(pwd)"
 
 # Check if Zotero is running and wait for it to close
