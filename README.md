@@ -48,7 +48,7 @@ The `.gitignore` file excludes:
 - Works across multiple computers
 - Smart process handling with notifications
 - Keeps a complete history of all your changes
-- Automatically manages conflicts and file locks
+- Detects conflicts between machines and manages file locks
 
 ## Quick Start Guide
 
@@ -152,7 +152,7 @@ The `backup.sh` script is the heart of this backup system. Here's what it does:
 - **Automatic Recovery**: Removes stale lock files after 1 hour timeout
 
 ### Git Integration
-- **Conflict Resolution**: Automatically handles merge conflicts with remote repository
+- **Conflict Detection**: Only fast-forwards to other machines' backups. If both sides changed the library, it stops and notifies you instead of merging
 - **Smart Commits**: Only commits when there are actual changes
 - **Document Tracking**: Logs which PDFs and documents were added/modified
 - **Push Safety**: Only removes temporary files after successful Git push
@@ -202,14 +202,24 @@ The script manages several types of files:
 
 ### Conflict Resolution
 
-The script now handles conflicts more gracefully:
+The script never merges two versions of `zotero.sqlite`:
 
-1. First attempts a fast-forward pull
-2. If that fails, tries auto-merge favoring local changes
-3. If conflicts still occur:
-   - Notifies you to close Zotero
-   - Preserves your local changes
-   - Will retry in the next backup cycle
+1. It fast-forwards to other machines' backups
+2. If this machine and another machine have both changed the library, there is no merge:
+   - You'll receive a "Zotero Backup: Conflict" notification
+   - Nothing is committed or pushed, and local files are untouched
+   - Every later run stops the same way until the conflict is resolved
+
+To resolve, close Zotero and keep one side:
+```bash
+# Keep the remote library (discards changes made on this machine)
+cd ~/Zotero
+git reset --hard origin/master
+
+# Keep this library
+cd ~/Zotero
+git add -A && git commit -m 'Keep local library' && git merge -X ours origin/master && git push origin master
+```
 
 ## Checking if It's Working
 
@@ -251,6 +261,21 @@ journalctl -u zoterobck.service --user -f
    ./backup.sh
    ```
 3. Wait for completion before reopening Zotero
+
+### If You See "Zotero Backup: Conflict" Notification
+
+The library changed on this machine and on another machine since the last sync. Backup stopped and nothing was overwritten. Every run will stop the same way until you choose one side. Close Zotero, then either:
+
+1. Keep the remote library (discards changes made on this machine):
+   ```bash
+   cd ~/Zotero
+   git reset --hard origin/master
+   ```
+2. Or keep this library:
+   ```bash
+   cd ~/Zotero
+   git add -A && git commit -m 'Keep local library' && git merge -X ours origin/master && git push origin master
+   ```
 
 ### High Memory Usage from Git Maintenance
 

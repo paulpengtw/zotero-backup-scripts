@@ -8,7 +8,8 @@ check_zotero() {
     while [ $attempts -lt $max_attempts ]; do
         case "$(uname)" in
             "Darwin") # macOS
-                if ! pgrep -x "Zotero" > /dev/null; then
+                # Zotero 7+ names its macOS binary "zotero" (lowercase); match either
+                if ! pgrep -ix "zotero" > /dev/null; then
                     # Wait an additional 5 seconds after Zotero closes to ensure files are released
                     sleep 5
                     return 0
@@ -47,11 +48,11 @@ check_zotero() {
 notify_conflict() {
     case "$(uname)" in
         "Darwin") # macOS
-            osascript -e 'display notification "Please close Zotero and run backup manually to resolve" with title "Zotero Backup: Merge Conflict" sound name "Basso"'
+            osascript -e 'display notification "Library changed here and on another machine. Backup stopped, nothing overwritten. See zoterobck.out" with title "Zotero Backup: Conflict" sound name "Basso"'
             ;;
         "Linux")
             if command -v notify-send >/dev/null 2>&1; then
-                notify-send -u critical "Zotero Backup: Merge Conflict" "Please close Zotero and run backup manually to resolve"
+                notify-send -u critical "Zotero Backup: Conflict" "Library changed here and on another machine. Backup stopped, nothing overwritten. See zoterobck.out"
             fi
             ;;
     esac
@@ -86,7 +87,7 @@ touch "$LOCKFILE"
 # Ensure cleanup on script exit
 trap cleanup EXIT
 
-cd /Users/cheng/Zotero
+cd "${ZOTERO_DIR:-$HOME/Zotero}" || exit 1
 echo "EXECUTING BACKUP OF $(pwd)"
 
 # Check if Zotero is running and wait for it to close
@@ -101,20 +102,17 @@ rm -f zotero.sqlite.part*
 # Ensure we have the latest changes
 git fetch origin master
 
-# Check if we're behind the remote
-LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse origin/master)
-
-if [ "$LOCAL" != "$REMOTE" ]; then
-    # If we're behind, try to merge
-    if ! git merge origin/master --ff-only; then
-        # If fast-forward fails, try to resolve automatically
-        if ! git merge origin/master -X ours; then
-            echo "MERGE CONFLICT DETECTED!"
-            notify_conflict
-            exit 1
-        fi
-    fi
+# Bring in other machines' backups, but only as a fast-forward. Git cannot
+# merge two versions of zotero.sqlite, so if this machine and another one have
+# both changed the library, stop instead of overwriting either side.
+if ! git merge --ff-only origin/master; then
+    echo "CONFLICT: the library changed on this machine and on origin/master since the last sync."
+    echo "Nothing was committed, merged or pushed; local files are untouched."
+    echo "To resolve, close Zotero and keep one side:"
+    echo "  keep the remote library: git reset --hard origin/master"
+    echo "  keep this library:       git add -A && git commit -m 'Keep local library' && git merge -X ours origin/master && git push origin master"
+    notify_conflict
+    exit 1
 fi
 
 # Check if there are any changes to commit
@@ -126,11 +124,11 @@ if ! git diff --quiet HEAD || ! git diff --cached --quiet; then
     git add .
     
     # Track document changes for commit message
-    ChangedDocuments=$(git status | grep -E "\.(pdf|html|epub|pptx|docx)$" \
-    | sed -E 's/\smodified(.*)/mod \1/' \
-    | sed -E 's/\snew(.*)/new \1/' \
-    | sed -E 's/\srenamed(.*)/ren \1/' \
-    | sed -E 's/\sdeleted(.*)/del \1/' \
+    ChangedDocuments=$(git -c core.quotePath=false status | grep -E "\.(pdf|html|epub|pptx|docx)$" \
+    | sed -E 's/[[:space:]]modified(.*)/mod \1/' \
+    | sed -E 's/[[:space:]]new(.*)/new \1/' \
+    | sed -E 's/[[:space:]]renamed(.*)/ren \1/' \
+    | sed -E 's/[[:space:]]deleted(.*)/del \1/' \
     | sed -E 's/([a-z]{3}).*\/([^\/]*.pdf)$/(\1) \2/')
     
     # Commit and push changes
